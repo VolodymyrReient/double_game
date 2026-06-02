@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Генератор «Дабл» — локально у браузері</title>
+<style>
+  :root { --accent:#2b7de9; --bg:#f5f7fa; --card:#fff; --line:#e2e6ec; }
+  * { box-sizing:border-box; }
+  body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; margin:0;
+         background:var(--bg); color:#1f2733; line-height:1.5; }
+  .wrap { max-width:880px; margin:0 auto; padding:24px 18px 60px; }
+  h1 { font-size:24px; margin:0 0 4px; }
+  .sub { color:#647084; margin:0 0 20px; font-size:14px; }
+  .panel { background:var(--card); border:1px solid var(--line); border-radius:14px;
+           padding:18px 20px; margin-bottom:16px; }
+  .panel h2 { font-size:15px; margin:0 0 12px; color:#3a4554; text-transform:uppercase; letter-spacing:.04em; }
+  #drop { border:2px dashed #b9c4d4; border-radius:12px; padding:26px; text-align:center;
+          color:#647084; cursor:pointer; transition:.15s; background:#fbfcfe; }
+  #drop.hover { border-color:var(--accent); background:#eef5ff; color:var(--accent); }
+  #drop b { color:var(--accent); }
+  .row { display:flex; flex-wrap:wrap; gap:18px 28px; align-items:center; }
+  label.f { display:flex; align-items:center; gap:8px; font-size:14px; }
+  input[type=number] { width:72px; padding:6px 8px; border:1px solid #cbd3df; border-radius:8px; font-size:14px; }
+  select { padding:6px 8px; border:1px solid #cbd3df; border-radius:8px; font-size:14px; background:#fff; }
+  .hint { font-size:13px; color:#7b8698; margin-top:8px; }
+  button.go { background:var(--accent); color:#fff; border:0; border-radius:10px; padding:13px 22px;
+              font-size:16px; font-weight:600; cursor:pointer; }
+  button.go:disabled { background:#9db8e0; cursor:default; }
+  #status { font-size:14px; margin-top:14px; white-space:pre-wrap; }
+  .ok { color:#1d8a4c; } .warn { color:#b8860b; } .err { color:#c0392b; }
+  #thumbs { display:flex; flex-wrap:wrap; gap:6px; margin-top:12px; }
+  #thumbs canvas { width:46px; height:46px; border:1px solid var(--line); border-radius:6px; background:#fff; object-fit:contain; }
+  #preview { margin-top:14px; text-align:center; }
+  #preview canvas { width:280px; height:280px; border:1px solid var(--line); border-radius:50%; background:#fff; }
+  .badge { display:inline-block; background:#eef5ff; color:var(--accent); border-radius:20px;
+           padding:2px 10px; font-size:13px; font-weight:600; }
+  .emblem-box { margin-top:10px; display:none; }
+  .emblem-box.show { display:block; }
+  a.dl { display:inline-block; margin-top:10px; color:var(--accent); font-weight:600; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🐦 Генератор колоди «Дабл»</h1>
+
+  <div class="panel">
+    <h2>1 · Картинки-символи</h2>
+    <div id="drop">Перетягни сюди <b>пачку картинок</b> або <b>клацни, щоб вибрати</b><br>
+      <span style="font-size:13px">jpg · png · svg · webp · gif</span></div>
+    <input id="files" type="file" accept="image/*,.svg" multiple hidden>
+    <div id="count" class="hint"></div>
+    <div id="thumbs"></div>
+  </div>
+
+  <div class="panel">
+    <h2>2 · Колода</h2>
+    <div class="row">
+      <label class="f">Розмір колоди:
+        <select id="deck"></select>
+      </label>
+      <label class="f">⌀ картки, мм: <input id="size" type="number" value="95" min="40" max="190"></label>
+      <label class="f">Якість друку:
+        <select id="dpi">
+          <option value="150">150 dpi (легше)</option>
+          <option value="200" selected>200 dpi (рекомендовано)</option>
+          <option value="300">300 dpi (важче)</option>
+        </select>
+      </label>
+    </div>
+    <div id="deckinfo" class="hint"></div>
+  </div>
+
+  <div class="panel">
+    <h2>3 · Опції (необов'язково)</h2>
+    <div class="row">
+      <label class="f"><input id="grid" type="checkbox" checked> Сітка для вирізання (у полях, не на картках)</label>
+      <label class="f"><input id="useEmblem" type="checkbox"> Сорочка з емблемою (двосторонній PDF)</label>
+    </div>
+    <div id="emblemBox" class="emblem-box">
+      <label class="f">Файл емблеми: <input id="emblemFile" type="file" accept="image/*,.svg"></label>
+      <div class="hint">Картка-сорочка з цією емблемою. Друк: двосторонній, переворот по довгій стороні.</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <button id="go" class="go" disabled>Згенерувати PDF</button>
+    <a id="dl" class="dl" style="display:none"></a>
+    <div id="status"></div>
+    <div id="preview"></div>
+  </div>
+</div>
+
+<script>
+// ---------------------------------------------------------------- утиліти
+const $ = s => document.querySelector(s);
+const mm2px = (mm, dpi) => Math.round(mm / 25.4 * dpi);
+function mulberry32(a){ return function(){ a|=0; a=a+0x6D2B79F5|0; let t=Math.imul(a^a>>>15,1|a);
+  t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; }
+
+// прості числа -> повні колоди: символів = n*n+n+1, на картці = n+1
+const PRIMES = [2,3,5,7,11,13];
+const DECKS = PRIMES.map(n => ({ n, total: n*n+n+1, per: n+1 }));
+
+let SYMBOLS = [];   // [{canvas,w,h}]
+let EMBLEM = null;  // {canvas,w,h}
+
+// ---------------------------------------------------------------- завантаження/обрізання
+function fileToImage(file){
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => { res(img); /* keep url until drawn */ img._url = url; };
+    img.onerror = () => { URL.revokeObjectURL(url); rej(new Error("bad image "+file.name)); };
+    img.src = url;
+  });
+}
+
+function trimToContent(img, cap=700){
+  const w = img.naturalWidth, h = img.naturalHeight;
+  const s = Math.min(1, 480 / Math.max(w, h));               // аналіз на зменшеній копії
+  const aw = Math.max(1, Math.round(w*s)), ah = Math.max(1, Math.round(h*s));
+  const a = document.createElement('canvas'); a.width=aw; a.height=ah;
+  const actx = a.getContext('2d', {willReadFrequently:true});
+  actx.drawImage(img, 0, 0, aw, ah);
+  const d = actx.getImageData(0,0,aw,ah).data;
+  let alphaMin = 255;
+  for (let i=3; i<d.length; i+=4) if (d[i] < alphaMin) alphaMin = d[i];
+  const useAlpha = alphaMin < 250;
+  let x0=aw, y0=ah, x1=0, y1=0, found=false;
+  for (let y=0; y<ah; y++) for (let x=0; x<aw; x++){
+    const i=(y*aw+x)*4, r=d[i],g=d[i+1],b=d[i+2],al=d[i+3];
+    const solid = useAlpha ? al>16 : !(r>238 && g>238 && b>238);
+    if (solid){ found=true; if(x<x0)x0=x; if(x>x1)x1=x; if(y<y0)y0=y; if(y>y1)y1=y; }
+  }
+  if (!found){ x0=0; y0=0; x1=aw-1; y1=ah-1; }
+  // межі назад до оригіналу + невеликий відступ
+  const pad = 0.02;
+  let ox0=Math.floor((x0/s) - w*pad), oy0=Math.floor((y0/s) - h*pad);
+  let ox1=Math.ceil((x1/s) + w*pad),  oy1=Math.ceil((y1/s) + h*pad);
+  ox0=Math.max(0,ox0); oy0=Math.max(0,oy0); ox1=Math.min(w,ox1); oy1=Math.min(h,oy1);
+  const cw=Math.max(1,ox1-ox0), ch=Math.max(1,oy1-oy0);
+  const os=Math.min(1, cap/Math.max(cw,ch));
+  const ow=Math.max(1,Math.round(cw*os)), oh=Math.max(1,Math.round(ch*os));
+  const out=document.createElement('canvas'); out.width=ow; out.height=oh;
+  out.getContext('2d').drawImage(img, ox0,oy0,cw,ch, 0,0,ow,oh);
+  if (img._url) URL.revokeObjectURL(img._url);
+  return { canvas: out, w: ow, h: oh };
+}
+
+// ---------------------------------------------------------------- колода
+function buildDeck(n){
+  const cards=[]; const base=[]; for(let i=0;i<=n;i++) base.push(i); cards.push(base);
+  for(let j=0;j<n;j++){ const c=[0]; for(let k=0;k<n;k++) c.push((n+1)+n*j+k); cards.push(c); }
+  for(let i=0;i<n;i++) for(let j=0;j<n;j++){ const c=[i+1];
+    for(let k=0;k<n;k++) c.push((n+1)+n*k+((i*k+j)%n)); cards.push(c); }
+  return cards;
+}
+function verifyDeck(deck){
+  const freq={}; let ok=true;
+  for(const c of deck) for(const s of c) freq[s]=(freq[s]||0)+1;
+  for(let a=0;a<deck.length;a++) for(let b=a+1;b<deck.length;b++){
+    const sa=new Set(deck[a]); let common=0; for(const s of deck[b]) if(sa.has(s)) common++;
+    if(common!==1){ ok=false; } }
+  return ok;
+}
+
+// ---------------------------------------------------------------- розкладка символів
+function pack(nSym, R, rng){
+  let rmin=0.29, rmax=0.325, gap=1.015;
+  for(let attempt=0; attempt<40; attempt++){
+    const radii=[]; for(let i=0;i<nSym;i++) radii.push((rmin+(rmax-rmin)*rng())*R);
+    radii.sort((a,b)=>b-a);
+    const pts=radii.map(r=>{ const a=rng()*2*Math.PI, rad=(R-r)*Math.sqrt(rng());
+      return [rad*Math.cos(a), rad*Math.sin(a)]; });
+    for(let it=0; it<600; it++){
+      let moved=false;
+      for(let i=0;i<nSym;i++) for(let j=i+1;j<nSym;j++){
+        let dx=pts[j][0]-pts[i][0], dy=pts[j][1]-pts[i][1];
+        let d=Math.hypot(dx,dy)||1e-6, mind=(radii[i]+radii[j])*gap;
+        if(d<mind){ const o=(mind-d)/2, ux=dx/d, uy=dy/d;
+          pts[i][0]-=ux*o; pts[i][1]-=uy*o; pts[j][0]+=ux*o; pts[j][1]+=uy*o; moved=true; } }
+      for(let i=0;i<nSym;i++){ const d=Math.hypot(pts[i][0],pts[i][1]), maxd=R-radii[i];
+        if(d>maxd){ const s=maxd/d; pts[i][0]*=s; pts[i][1]*=s; moved=true; } }
+      if(!moved) break;
+    }
+    let ok=true;
+    for(let i=0;i<nSym&&ok;i++){ if(Math.hypot(pts[i][0],pts[i][1])>R-radii[i]+1e-6){ok=false;break;}
+      for(let j=i+1;j<nSym;j++){ if(Math.hypot(pts[j][0]-pts[i][0],pts[j][1]-pts[i][1])<radii[i]+radii[j]-1e-6){ok=false;break;} } }
+    if(ok) return {pts, radii};
+    rmin*=0.96; rmax*=0.96;
+  }
+  return {pts:[], radii:[]}; // повернеться рідко; на практиці завжди вкладається
+}
+
+function drawCard(ctx, x, y, R, symCanvases, rng){
+  const cx=x+R, cy=y+R;
+  ctx.save();
+  ctx.beginPath(); ctx.arc(cx,cy,R-1,0,7); ctx.fillStyle='#fff'; ctx.fill();        // білий кружок
+  ctx.lineWidth=2; ctx.strokeStyle='#aaa'; ctx.stroke();                            // лінія різу
+  const {pts, radii} = pack(symCanvases.length, R*0.97, rng);
+  const order=[...symCanvases.keys()]; for(let i=order.length-1;i>0;i--){const j=Math.floor(rng()*(i+1)); [order[i],order[j]]=[order[j],order[i]];}
+  order.forEach((si, idx) => {
+    const sym=symCanvases[si], p=pts[idx], r=radii[idx];
+    const diag=Math.hypot(sym.w, sym.h)||1, scale=(2*r)/diag;
+    const w=sym.w*scale, h=sym.h*scale;
+    ctx.save(); ctx.translate(cx+p[0], cy+p[1]); ctx.rotate(rng()*2*Math.PI);
+    ctx.drawImage(sym.canvas, -w/2, -h/2, w, h); ctx.restore();
+  });
+  ctx.restore();
+}
+function drawEmblem(ctx, x, y, R){
+  const cx=x+R, cy=y+R;
+  ctx.save(); ctx.beginPath(); ctx.arc(cx,cy,R-1,0,7); ctx.clip();
+  // вписати квадратну емблему в коло (центр-обтинання)
+  const s=Math.max(2*R/EMBLEM.w, 2*R/EMBLEM.h), w=EMBLEM.w*s, h=EMBLEM.h*s;
+  ctx.drawImage(EMBLEM.canvas, cx-w/2, cy-h/2, w, h); ctx.restore();
+  ctx.save(); ctx.beginPath(); ctx.arc(cx,cy,R-1,0,7); ctx.lineWidth=2; ctx.strokeStyle='#aaa'; ctx.stroke(); ctx.restore();
+}
+function drawGrid(ctx, W, H, R, mx, my, nRows){
+  ctx.save(); ctx.strokeStyle='#a0a0a0'; ctx.lineWidth=2;
+  const D=2*R, off=Math.round(R*0.032);
+  const line=(x1,y1,x2,y2)=>{ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();};
+  line(mx-off,0,mx-off,H); line(mx+D+off,0,mx+D+off,H);
+  const ys=[Math.round(my/2)];
+  for(let k=0;k<nRows-1;k++){ const bottom=my+k*(D+my)+D, topNext=my+(k+1)*(D+my); ys.push(Math.round((bottom+topNext)/2)); }
+  ys.push(Math.round((my+(nRows-1)*(D+my)+D+H)/2));
+  ys.forEach(yy=>line(0,yy,W,yy));
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------- збирання сторінок + PDF
+function canvasJpeg(canvas, q){
+  return new Promise(res => canvas.toBlob(async b => {
+    const buf=new Uint8Array(await b.arrayBuffer());
+    res({ bytes:buf, w:canvas.width, h:canvas.height });
+  }, 'image/jpeg', q));
+}
+
+function buildPDF(pages, Wpt, Hpt){
+  const enc=new TextEncoder(); const parts=[]; let offset=0; const offsets={};
+  const out=x=>{ const b=typeof x==='string'?enc.encode(x):x; parts.push(b); offset+=b.length; };
+  const obj=(id,body)=>{ offsets[id]=offset; out(`${id} 0 obj\n`); out(body); out("\nendobj\n"); };
+  const objS=(id,dict,bytes)=>{ offsets[id]=offset; out(`${id} 0 obj\n`); out(dict); out("\nstream\n"); out(bytes); out("\nendstream\nendobj\n"); };
+  out("%PDF-1.4\n");
+  const N=pages.length; let id=3;
+  const ids=pages.map(()=>({pg:id++,ct:id++,im:id++})); const totalObjs=2+N*3;
+  obj(1,"<< /Type /Catalog /Pages 2 0 R >>");
+  obj(2,`<< /Type /Pages /Kids [${ids.map(o=>`${o.pg} 0 R`).join(" ")}] /Count ${N} >>`);
+  ids.forEach((o,i)=>{ const jp=pages[i];
+    obj(o.pg,`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${Wpt} ${Hpt}] /Resources << /XObject << /Im0 ${o.im} 0 R >> >> /Contents ${o.ct} 0 R >>`);
+    const content=`q ${Wpt} 0 0 ${Hpt} 0 0 cm /Im0 Do Q`;
+    objS(o.ct,`<< /Length ${content.length} >>`, enc.encode(content));
+    objS(o.im,`<< /Type /XObject /Subtype /Image /Width ${jp.w} /Height ${jp.h} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jp.bytes.length} >>`, jp.bytes);
+  });
+  const xrefOffset=offset; const total=totalObjs+1;
+  out(`xref\n0 ${total}\n`); out("0000000000 65535 f \n");
+  for(let i=1;i<=totalObjs;i++) out(String(offsets[i]).padStart(10,'0')+" 00000 n \n");
+  out(`trailer\n<< /Size ${total} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`);
+  const len=parts.reduce((a,b)=>a+b.length,0); const buf=new Uint8Array(len); let p=0;
+  for(const b of parts){ buf.set(b,p); p+=b.length; } return buf;
+}
+
+const status=(msg,cls='')=>{ $('#status').className=cls; $('#status').textContent=msg; };
+
+async function generate(){
+  const deckOpt=DECKS[+$('#deck').value];
+  const dpi=+$('#dpi').value, cardMM=+$('#size').value;
+  const useGrid=$('#grid').checked, useEmblem=$('#useEmblem').checked;
+  if(useEmblem && !EMBLEM){ status('Спершу вибери файл емблеми для сорочки.', 'err'); return; }
+
+  $('#go').disabled=true; $('#dl').style.display='none';
+  status('Готую символи…');
+  await new Promise(r=>setTimeout(r,30));
+
+  // символи: потрібна кількість має бути в наявності (без домальовування)
+  const need=deckOpt.total;
+  if(SYMBOLS.length < need){
+    status(`Бракує ${need-SYMBOLS.length} картинок: для цієї колоди потрібно ${need}, а маєш ${SYMBOLS.length}.\n`+
+           `Додай ще картинки або обери меншу колоду.`, 'err');
+    $('#go').disabled=false; return;
+  }
+  const syms=SYMBOLS.slice(0, need);
+
+  const deck=buildDeck(deckOpt.n);
+  const okDeck=verifyDeck(deck);
+
+  const R=mm2px(cardMM, dpi)/2;
+  const A4w=mm2px(210,dpi), A4h=mm2px(297,dpi);
+  const perCol=3, mx=Math.floor((A4w-2*R)/2), my=Math.floor((A4h-perCol*2*R)/(perCol+1));
+  if(my<0){ status('Картки завеликі — 3 не вміщаються на сторінку. Зменш ⌀ картки.', 'err'); $('#go').disabled=false; return; }
+  const slotY=k=>my+k*(2*R+my);
+
+  const Wpt=210/25.4*72, Hpt=297/25.4*72, q=0.92;
+  const pages=[]; const nPagesFront=Math.ceil(deck.length/perCol);
+
+  // одна канва, перевикористовуємо
+  const pc=document.createElement('canvas'); pc.width=A4w; pc.height=A4h;
+  const ctx=pc.getContext('2d');
+
+  let firstPreview=null;
+  for(let pi=0; pi<nPagesFront; pi++){
+    // ----- фронт -----
+    ctx.fillStyle='#fff'; ctx.fillRect(0,0,A4w,A4h);
+    const start=pi*perCol, chunk=deck.slice(start, start+perCol);
+    chunk.forEach((card,k)=>{
+      const rng=mulberry32(1000+start+k);
+      drawCard(ctx, mx, slotY(k), R, card.map(s=>syms[s]), rng);
+    });
+    if(useGrid) drawGrid(ctx, A4w, A4h, R, mx, my, chunk.length);
+    if(pi===0){ firstPreview=ctx.getImageData(mx, slotY(0), 2*R, 2*R); }
+    pages.push(await canvasJpeg(pc, q));
+    status(`Рендер фронтів… ${pi+1}/${nPagesFront}`);
+    await new Promise(r=>setTimeout(r));
+
+    // ----- сорочка (за потреби) одразу після фронта -----
+    if(useEmblem){
+      ctx.fillStyle='#fff'; ctx.fillRect(0,0,A4w,A4h);
+      chunk.forEach((_,k)=> drawEmblem(ctx, mx, slotY(k), R));
+      if(useGrid) drawGrid(ctx, A4w, A4h, R, mx, my, chunk.length);
+      pages.push(await canvasJpeg(pc, q));
+    }
+  }
+
+  status('Збираю PDF…');
+  await new Promise(r=>setTimeout(r,30));
+  const pdf=buildPDF(pages, Wpt.toFixed(2), Hpt.toFixed(2));
+  const blob=new Blob([pdf], {type:'application/pdf'});
+  const url=URL.createObjectURL(blob);
+  const a=$('#dl'); a.href=url; a.download = useEmblem ? 'dobble_2sided.pdf' : 'dobble_cards.pdf';
+  a.textContent='⬇︎ Завантажити '+a.download; a.style.display='inline-block';
+  a.click();
+
+  // прев'ю першої картки
+  if(firstPreview){ const pv=document.createElement('canvas'); pv.width=firstPreview.width; pv.height=firstPreview.height;
+    pv.getContext('2d').putImageData(firstPreview,0,0); $('#preview').innerHTML=''; $('#preview').appendChild(pv); }
+
+  const usedNote = SYMBOLS.length>need ? `, не задіяно ${SYMBOLS.length-need} картинок` : '';
+  status(`Готово ✅  Колода: ${deck.length} карток, по ${deckOpt.per} символів. `+
+         `Сторінок у PDF: ${pages.length}${useEmblem?' (фронти+сорочки)':''}${usedNote}.\n`+
+         `Перевірка «кожна пара ділить рівно 1 символ»: ${okDeck?'пройдено ✅':'ПОМИЛКА ❌'}.`+
+         (useEmblem?'\nДрук: двосторонній, переворот по ДОВГІЙ стороні, масштаб 100%.':'\nДрук: масштаб 100%.'),
+         okDeck?'ok':'err');
+  $('#go').disabled=false;
+}
+
+// ---------------------------------------------------------------- UI
+function refreshDeckOptions(){
+  const M=SYMBOLS.length; const sel=$('#deck'); sel.innerHTML='';
+  DECKS.forEach((d,i)=>{
+    const o=document.createElement('option'); o.value=i;
+    let tag='';
+    if(M>0){
+      if(d.total===M) tag=' (усі картинки)';
+      else if(d.total<M) tag=` (${M-d.total} зайвих)`;
+      else tag=` (бракує ${d.total-M})`;
+    }
+    o.textContent=`${d.total} символів · ${d.per} на картці · ${d.total} карток${tag}`;
+    sel.appendChild(o);
+  });
+  // рекомендація: найбільша повна колода, що ВМІЩАЄТЬСЯ (total<=M); без картинок — класична (57)
+  let recIdx;
+  if(M>0){ recIdx=0; for(let i=DECKS.length-1;i>=0;i--){ if(DECKS[i].total<=M){ recIdx=i; break; } } }
+  else { recIdx=DECKS.findIndex(d=>d.n===7); }
+  sel.value=recIdx; updateDeckInfo();
+}
+function updateDeckInfo(){
+  const info=$('#deckinfo'), M=SYMBOLS.length;
+  if(M===0){ info.className='hint'; info.textContent='Спершу додай картинки вище — тоді підкажу найкращий розмір.'; $('#go').disabled=true; return; }
+  const d=DECKS[+$('#deck').value];
+  if(M<d.total){
+    info.className='hint warn';
+    info.innerHTML=`⚠️ Бракує <b>${d.total-M}</b> картинок: потрібно ${d.total}, маєш ${M}. Додай ще або обери меншу колоду.`;
+    $('#go').disabled=true; return;
+  }
+  info.className='hint';
+  info.textContent=`Потрібно ${d.total} символів. Маєш ${M} — візьму перші ${d.total}`+(M>d.total?`, решту (${M-d.total}) не задію.`:'.');
+  $('#go').disabled=false;
+}
+
+async function addFiles(fileList){
+  const imgs=[...fileList].filter(f=>f.type.startsWith('image/')||/\.svg$/i.test(f.name));
+  if(!imgs.length) return;
+  $('#count').textContent='Обробляю картинки…';
+  for(const f of imgs){
+    try { const img=await fileToImage(f); SYMBOLS.push(trimToContent(img)); }
+    catch(e){ console.warn(e); }
+  }
+  // мініатюри
+  const t=$('#thumbs'); t.innerHTML='';
+  SYMBOLS.forEach(s=>{ const c=document.createElement('canvas'); c.width=46; c.height=46;
+    const cx=c.getContext('2d'); const sc=Math.min(44/s.w,44/s.h);
+    cx.drawImage(s.canvas,(46-s.w*sc)/2,(46-s.h*sc)/2,s.w*sc,s.h*sc); t.appendChild(c); });
+  $('#count').innerHTML=`Завантажено <span class="badge">${SYMBOLS.length}</span> картинок`;
+  refreshDeckOptions();
+}
+
+const drop=$('#drop');
+drop.onclick=()=>$('#files').click();
+$('#files').onchange=e=>addFiles(e.target.files);
+['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('hover');}));
+['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('hover');}));
+drop.addEventListener('drop',e=>addFiles(e.dataTransfer.files));
+$('#deck').onchange=updateDeckInfo;
+$('#useEmblem').onchange=e=>$('#emblemBox').classList.toggle('show', e.target.checked);
+$('#emblemFile').onchange=async e=>{ if(e.target.files[0]){ const img=await fileToImage(e.target.files[0]); EMBLEM=trimToContent(img,900); } };
+$('#go').onclick=()=>generate().catch(err=>{status('Помилка: '+err.message,'err'); $('#go').disabled=false;});
+refreshDeckOptions();   // показати опції колоди одразу, ще до завантаження картинок
+</script>
+</body>
+</html>
