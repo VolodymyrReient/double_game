@@ -31,6 +31,8 @@
   .ok { color:#1d8a4c; } .warn { color:#b8860b; } .err { color:#c0392b; }
   #thumbs { display:flex; flex-wrap:wrap; gap:6px; margin-top:12px; }
   #thumbs canvas { width:46px; height:46px; border:1px solid var(--line); border-radius:6px; background:#fff; object-fit:contain; }
+  #thumbs canvas.lowres { outline:2px solid #e74c3c; outline-offset:1px; }
+  #reswarn a { color:var(--accent); white-space:nowrap; }
   #preview { margin-top:14px; text-align:center; }
   #preview canvas { width:280px; height:280px; border:1px solid var(--line); border-radius:50%; background:#fff; }
   .badge { display:inline-block; background:#eef5ff; color:var(--accent); border-radius:20px;
@@ -42,15 +44,16 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>🐦 Генератор колоди «Дабл»</h1>
+  <h1>🃏 Генератор колоди «Дабл»</h1>
 
   <div class="panel">
     <h2>1 · Картинки-символи</h2>
-    <div id="drop">Перетягни сюди <b>пачку картинок</b> або <b>клацни, щоб вибрати</b><br>
+    <div id="drop">Перетягніть сюди <b>набір картинок</b> або <b>натисніть, щоб вибрати</b><br>
       <span style="font-size:13px">jpg · png · svg · webp · gif</span></div>
     <input id="files" type="file" accept="image/*,.svg" multiple hidden>
     <div id="count" class="hint"></div>
     <div id="thumbs"></div>
+    <div id="reswarn" class="hint"></div>
   </div>
 
   <div class="panel">
@@ -59,7 +62,13 @@
       <label class="f">Розмір колоди:
         <select id="deck"></select>
       </label>
-      <label class="f">⌀ картки, мм: <input id="size" type="number" value="95" min="40" max="190"></label>
+      <label class="f">Форма:
+        <select id="shape">
+          <option value="circle" selected>Круглі ◯</option>
+          <option value="square">Квадратні ▢</option>
+        </select>
+      </label>
+      <label class="f">Розмір картки, мм: <input id="size" type="number" value="95" min="40" max="190"></label>
       <label class="f">Якість друку:
         <select id="dpi">
           <option value="150">150 dpi (легше)</option>
@@ -156,49 +165,79 @@ function buildDeck(n){
     for(let k=0;k<n;k++) c.push((n+1)+n*k+((i*k+j)%n)); cards.push(c); }
   return cards;
 }
-function verifyDeck(deck){
-  const freq={}; let ok=true;
-  for(const c of deck) for(const s of c) freq[s]=(freq[s]||0)+1;
-  for(let a=0;a<deck.length;a++) for(let b=a+1;b<deck.length;b++){
-    const sa=new Set(deck[a]); let common=0; for(const s of deck[b]) if(sa.has(s)) common++;
-    if(common!==1){ ok=false; } }
-  return ok;
+// Сувора перевірка колоди (як verify() у Python): кількість, розмір карток,
+// повторюваність кожного символу та попарна властивість.
+function verifyDeck(deck, total, per){
+  const nCards=deck.length;
+  const symSet=new Set(); deck.forEach(c=>c.forEach(s=>symSet.add(s)));
+  const nSyms=symSet.size;
+  const sizes=[...new Set(deck.map(c=>c.length))].sort((a,b)=>a-b);
+  const freq={}; deck.forEach(c=>c.forEach(s=>freq[s]=(freq[s]||0)+1));
+  const freqVals=[...new Set(Object.values(freq))].sort((a,b)=>a-b);
+  const nPairs=nCards*(nCards-1)/2; let badPairs=0;
+  for(let a=0;a<nCards;a++){ const sa=new Set(deck[a]);
+    for(let b=a+1;b<nCards;b++){ let common=0; for(const s of deck[b]) if(sa.has(s)) common++; if(common!==1) badPairs++; } }
+  const countOK = nCards===total && nSyms===total;
+  const sizesOK = sizes.length===1 && sizes[0]===per;
+  const freqOK  = freqVals.length===1 && freqVals[0]===per;   // кожен символ рівно per разів
+  const pairsOK = badPairs===0;
+  return { ok: countOK&&sizesOK&&freqOK&&pairsOK, nCards, nSyms, total, per,
+           sizes, freqVals, nPairs, badPairs, countOK, sizesOK, freqOK, pairsOK };
 }
 
 // ---------------------------------------------------------------- розкладка символів
-function pack(nSym, R, rng){
-  let rmin=0.29, rmax=0.325, gap=1.015;
-  for(let attempt=0; attempt<40; attempt++){
-    const radii=[]; for(let i=0;i<nSym;i++) radii.push((rmin+(rmax-rmin)*rng())*R);
+function pack(nSym, R, rng, shape='circle'){
+  const square = shape==='square';
+  const fill = square ? 0.82 : 0.72;                                  // цільова частка площі під символами
+  let base = Math.min(Math.sqrt(fill/nSym), square?0.46:0.40);        // радіус символу як частка R — масштабується з кількістю
+  const gap=1.015;
+  for(let attempt=0; attempt<50; attempt++){
+    const radii=[]; for(let i=0;i<nSym;i++) radii.push(base*(0.9+0.2*rng())*R);
     radii.sort((a,b)=>b-a);
-    const pts=radii.map(r=>{ const a=rng()*2*Math.PI, rad=(R-r)*Math.sqrt(rng());
-      return [rad*Math.cos(a), rad*Math.sin(a)]; });
-    for(let it=0; it<600; it++){
+    const pts=radii.map(r=>{
+      if(square){ const lim=R-r; return [(rng()*2-1)*lim, (rng()*2-1)*lim]; }
+      const a=rng()*2*Math.PI, rad=(R-r)*Math.sqrt(rng()); return [rad*Math.cos(a), rad*Math.sin(a)];
+    });
+    for(let it=0; it<700; it++){
       let moved=false;
+      // розштовхування пар
       for(let i=0;i<nSym;i++) for(let j=i+1;j<nSym;j++){
         let dx=pts[j][0]-pts[i][0], dy=pts[j][1]-pts[i][1];
         let d=Math.hypot(dx,dy)||1e-6, mind=(radii[i]+radii[j])*gap;
         if(d<mind){ const o=(mind-d)/2, ux=dx/d, uy=dy/d;
           pts[i][0]-=ux*o; pts[i][1]-=uy*o; pts[j][0]+=ux*o; pts[j][1]+=uy*o; moved=true; } }
-      for(let i=0;i<nSym;i++){ const d=Math.hypot(pts[i][0],pts[i][1]), maxd=R-radii[i];
-        if(d>maxd){ const s=maxd/d; pts[i][0]*=s; pts[i][1]*=s; moved=true; } }
+      // центрування: зсуваємо весь набір так, щоб центр мас був у центрі картки
+      let cx=0, cy=0; for(const p of pts){cx+=p[0]; cy+=p[1];} cx/=nSym; cy/=nSym;
+      if(Math.hypot(cx,cy)>0.002*R){ for(const p of pts){p[0]-=cx*0.6; p[1]-=cy*0.6;} moved=true; }
+      // межі
+      for(let i=0;i<nSym;i++){
+        const lim=R-radii[i];
+        if(square){
+          if(pts[i][0]>lim){pts[i][0]=lim;moved=true;} if(pts[i][0]<-lim){pts[i][0]=-lim;moved=true;}
+          if(pts[i][1]>lim){pts[i][1]=lim;moved=true;} if(pts[i][1]<-lim){pts[i][1]=-lim;moved=true;}
+        } else { const d=Math.hypot(pts[i][0],pts[i][1]); if(d>lim){ const s=lim/d; pts[i][0]*=s; pts[i][1]*=s; moved=true; } }
+      }
       if(!moved) break;
     }
     let ok=true;
-    for(let i=0;i<nSym&&ok;i++){ if(Math.hypot(pts[i][0],pts[i][1])>R-radii[i]+1e-6){ok=false;break;}
+    for(let i=0;i<nSym&&ok;i++){
+      const lim=R-radii[i]+1e-6;
+      if(square){ if(Math.abs(pts[i][0])>lim||Math.abs(pts[i][1])>lim){ok=false;break;} }
+      else if(Math.hypot(pts[i][0],pts[i][1])>lim){ok=false;break;}
       for(let j=i+1;j<nSym;j++){ if(Math.hypot(pts[j][0]-pts[i][0],pts[j][1]-pts[i][1])<radii[i]+radii[j]-1e-6){ok=false;break;} } }
     if(ok) return {pts, radii};
-    rmin*=0.96; rmax*=0.96;
+    base*=0.95;
   }
   return {pts:[], radii:[]}; // повернеться рідко; на практиці завжди вкладається
 }
 
-function drawCard(ctx, x, y, R, symCanvases, rng){
+function drawCard(ctx, x, y, R, symCanvases, rng, shape='circle'){
   const cx=x+R, cy=y+R;
   ctx.save();
-  ctx.beginPath(); ctx.arc(cx,cy,R-1,0,7); ctx.fillStyle='#fff'; ctx.fill();        // білий кружок
-  ctx.lineWidth=2; ctx.strokeStyle='#aaa'; ctx.stroke();                            // лінія різу
-  const {pts, radii} = pack(symCanvases.length, R*0.97, rng);
+  ctx.fillStyle='#fff'; ctx.lineWidth=2; ctx.strokeStyle='#aaa';
+  if(shape==='square'){ ctx.fillRect(x,y,2*R,2*R); ctx.strokeRect(x+1,y+1,2*R-2,2*R-2); }   // біла картка + лінія різу
+  else { ctx.beginPath(); ctx.arc(cx,cy,R-1,0,7); ctx.fill(); ctx.stroke(); }
+  const {pts, radii} = pack(symCanvases.length, R*0.97, rng, shape);
   const order=[...symCanvases.keys()]; for(let i=order.length-1;i>0;i--){const j=Math.floor(rng()*(i+1)); [order[i],order[j]]=[order[j],order[i]];}
   order.forEach((si, idx) => {
     const sym=symCanvases[si], p=pts[idx], r=radii[idx];
@@ -209,23 +248,35 @@ function drawCard(ctx, x, y, R, symCanvases, rng){
   });
   ctx.restore();
 }
-function drawEmblem(ctx, x, y, R){
+function drawEmblem(ctx, x, y, R, shape='circle'){
   const cx=x+R, cy=y+R;
-  ctx.save(); ctx.beginPath(); ctx.arc(cx,cy,R-1,0,7); ctx.clip();
-  // вписати квадратну емблему в коло (центр-обтинання)
-  const s=Math.max(2*R/EMBLEM.w, 2*R/EMBLEM.h), w=EMBLEM.w*s, h=EMBLEM.h*s;
+  ctx.save();
+  if(shape==='square'){ ctx.beginPath(); ctx.rect(x,y,2*R,2*R); ctx.clip(); }
+  else { ctx.beginPath(); ctx.arc(cx,cy,R-1,0,7); ctx.clip(); }
+  const s=Math.max(2*R/EMBLEM.w, 2*R/EMBLEM.h), w=EMBLEM.w*s, h=EMBLEM.h*s;   // заповнити (центр-обтинання)
   ctx.drawImage(EMBLEM.canvas, cx-w/2, cy-h/2, w, h); ctx.restore();
-  ctx.save(); ctx.beginPath(); ctx.arc(cx,cy,R-1,0,7); ctx.lineWidth=2; ctx.strokeStyle='#aaa'; ctx.stroke(); ctx.restore();
+  ctx.save(); ctx.lineWidth=2; ctx.strokeStyle='#aaa';
+  if(shape==='square'){ ctx.strokeRect(x+1,y+1,2*R-2,2*R-2); }
+  else { ctx.beginPath(); ctx.arc(cx,cy,R-1,0,7); ctx.stroke(); }
+  ctx.restore();
 }
-function drawGrid(ctx, W, H, R, mx, my, nRows){
+function drawGrid(ctx, W, H, R, mx, my, nRows, shape='circle'){
   ctx.save(); ctx.strokeStyle='#a0a0a0'; ctx.lineWidth=2;
-  const D=2*R, off=Math.round(R*0.032);
+  const D=2*R;
   const line=(x1,y1,x2,y2)=>{ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();};
-  line(mx-off,0,mx-off,H); line(mx+D+off,0,mx+D+off,H);
-  const ys=[Math.round(my/2)];
-  for(let k=0;k<nRows-1;k++){ const bottom=my+k*(D+my)+D, topNext=my+(k+1)*(D+my); ys.push(Math.round((bottom+topNext)/2)); }
-  ys.push(Math.round((my+(nRows-1)*(D+my)+D+H)/2));
-  ys.forEach(yy=>line(0,yy,W,yy));
+  if(shape==='square'){
+    // лінії збігаються з краями карток (це і є лінії різу)
+    line(mx,0,mx,H); line(mx+D,0,mx+D,H);
+    for(let k=0;k<nRows;k++){ const top=my+k*(D+my); line(0,top,W,top); line(0,top+D,W,top+D); }
+  } else {
+    // лінії в полях, не торкаються кружків
+    const off=Math.round(R*0.032);
+    line(mx-off,0,mx-off,H); line(mx+D+off,0,mx+D+off,H);
+    const ys=[Math.round(my/2)];
+    for(let k=0;k<nRows-1;k++){ const bottom=my+k*(D+my)+D, topNext=my+(k+1)*(D+my); ys.push(Math.round((bottom+topNext)/2)); }
+    ys.push(Math.round((my+(nRows-1)*(D+my)+D+H)/2));
+    ys.forEach(yy=>line(0,yy,W,yy));
+  }
   ctx.restore();
 }
 
@@ -266,29 +317,29 @@ const status=(msg,cls='')=>{ $('#status').className=cls; $('#status').textConten
 async function generate(){
   const deckOpt=DECKS[+$('#deck').value];
   const dpi=+$('#dpi').value, cardMM=+$('#size').value;
-  const useGrid=$('#grid').checked, useEmblem=$('#useEmblem').checked;
-  if(useEmblem && !EMBLEM){ status('Спершу вибери файл емблеми для сорочки.', 'err'); return; }
+  const useGrid=$('#grid').checked, useEmblem=$('#useEmblem').checked, shape=$('#shape').value;
+  if(useEmblem && !EMBLEM){ status('Потрібно обрати файл емблеми для сорочки.', 'err'); return; }
 
   $('#go').disabled=true; $('#dl').style.display='none';
-  status('Готую символи…');
+  status('Підготовка символів…');
   await new Promise(r=>setTimeout(r,30));
 
   // символи: потрібна кількість має бути в наявності (без домальовування)
   const need=deckOpt.total;
   if(SYMBOLS.length < need){
-    status(`Бракує ${need-SYMBOLS.length} картинок: для цієї колоди потрібно ${need}, а маєш ${SYMBOLS.length}.\n`+
-           `Додай ще картинки або обери меншу колоду.`, 'err');
+    status(`Недостатньо картинок: для цієї колоди потрібно ${need}, доступно ${SYMBOLS.length}.\n`+
+           `Можна додати ще картинки або обрати меншу колоду.`, 'err');
     $('#go').disabled=false; return;
   }
   const syms=SYMBOLS.slice(0, need);
 
   const deck=buildDeck(deckOpt.n);
-  const okDeck=verifyDeck(deck);
+  const v=verifyDeck(deck, deckOpt.total, deckOpt.per);
 
   const R=mm2px(cardMM, dpi)/2;
   const A4w=mm2px(210,dpi), A4h=mm2px(297,dpi);
   const perCol=3, mx=Math.floor((A4w-2*R)/2), my=Math.floor((A4h-perCol*2*R)/(perCol+1));
-  if(my<0){ status('Картки завеликі — 3 не вміщаються на сторінку. Зменш ⌀ картки.', 'err'); $('#go').disabled=false; return; }
+  if(my<0){ status('Картки завеликі — 3 не вміщаються на сторінку. Потрібно зменшити розмір картки.', 'err'); $('#go').disabled=false; return; }
   const slotY=k=>my+k*(2*R+my);
 
   const Wpt=210/25.4*72, Hpt=297/25.4*72, q=0.92;
@@ -305,9 +356,9 @@ async function generate(){
     const start=pi*perCol, chunk=deck.slice(start, start+perCol);
     chunk.forEach((card,k)=>{
       const rng=mulberry32(1000+start+k);
-      drawCard(ctx, mx, slotY(k), R, card.map(s=>syms[s]), rng);
+      drawCard(ctx, mx, slotY(k), R, card.map(s=>syms[s]), rng, shape);
     });
-    if(useGrid) drawGrid(ctx, A4w, A4h, R, mx, my, chunk.length);
+    if(useGrid) drawGrid(ctx, A4w, A4h, R, mx, my, chunk.length, shape);
     if(pi===0){ firstPreview=ctx.getImageData(mx, slotY(0), 2*R, 2*R); }
     pages.push(await canvasJpeg(pc, q));
     status(`Рендер фронтів… ${pi+1}/${nPagesFront}`);
@@ -316,8 +367,8 @@ async function generate(){
     // ----- сорочка (за потреби) одразу після фронта -----
     if(useEmblem){
       ctx.fillStyle='#fff'; ctx.fillRect(0,0,A4w,A4h);
-      chunk.forEach((_,k)=> drawEmblem(ctx, mx, slotY(k), R));
-      if(useGrid) drawGrid(ctx, A4w, A4h, R, mx, my, chunk.length);
+      chunk.forEach((_,k)=> drawEmblem(ctx, mx, slotY(k), R, shape));
+      if(useGrid) drawGrid(ctx, A4w, A4h, R, mx, my, chunk.length, shape);
       pages.push(await canvasJpeg(pc, q));
     }
   }
@@ -333,14 +384,24 @@ async function generate(){
 
   // прев'ю першої картки
   if(firstPreview){ const pv=document.createElement('canvas'); pv.width=firstPreview.width; pv.height=firstPreview.height;
-    pv.getContext('2d').putImageData(firstPreview,0,0); $('#preview').innerHTML=''; $('#preview').appendChild(pv); }
+    pv.getContext('2d').putImageData(firstPreview,0,0); pv.style.borderRadius = shape==='square'?'8px':'50%';
+    $('#preview').innerHTML=''; $('#preview').appendChild(pv); }
 
   const usedNote = SYMBOLS.length>need ? `, не задіяно ${SYMBOLS.length-need} картинок` : '';
-  status(`Готово ✅  Колода: ${deck.length} карток, по ${deckOpt.per} символів. `+
-         `Сторінок у PDF: ${pages.length}${useEmblem?' (фронти+сорочки)':''}${usedNote}.\n`+
-         `Перевірка «кожна пара ділить рівно 1 символ»: ${okDeck?'пройдено ✅':'ПОМИЛКА ❌'}.`+
-         (useEmblem?'\nДрук: двосторонній, переворот по ДОВГІЙ стороні, масштаб 100%.':'\nДрук: масштаб 100%.'),
-         okDeck?'ok':'err');
+  const lr = lowResWarnings();
+  const tick = b => b ? '✅' : '❌';
+  const report =
+    (lr.length?`⚠️ ${lr.length} картинок низької роздільності — на друці будуть трохи розмиті (не критично; позначені червоним).\n`:'')+
+    `Готово.  Сторінок у PDF: ${pages.length}${useEmblem?' (фронти+сорочки)':''}${usedNote}.\n`+
+    `── Перевірка колоди ──\n`+
+    `• Карток: ${v.nCards}/${v.total} ${tick(v.countOK)}\n`+
+    `• Різних символів: ${v.nSyms}/${v.total} ${tick(v.nSyms===v.total)}\n`+
+    `• Символів на картці: ${v.sizes.join(', ')} (має бути ${v.per}) ${tick(v.sizesOK)}\n`+
+    `• Повторюваність символу: ${v.freqVals.join(', ')} (має бути ${v.per}) ${tick(v.freqOK)}\n`+
+    `• Пар карток: ${v.nPairs}, спільних рівно 1 ${tick(v.pairsOK)}${v.badPairs?` (порушень: ${v.badPairs})`:''}\n`+
+    `РЕЗУЛЬТАТ: ${v.ok?'✅ КОЛОДА КОРЕКТНА':'❌ Є ПОМИЛКА'}\n`+
+    (useEmblem?'Друк: двосторонній, переворот по ДОВГІЙ стороні, масштаб 100%.':'Друк: масштаб 100%.');
+  status(report, v.ok?'ok':'err');
   $('#go').disabled=false;
 }
 
@@ -366,22 +427,60 @@ function refreshDeckOptions(){
 }
 function updateDeckInfo(){
   const info=$('#deckinfo'), M=SYMBOLS.length;
-  if(M===0){ info.className='hint'; info.textContent='Спершу додай картинки вище — тоді підкажу найкращий розмір.'; $('#go').disabled=true; return; }
+  if(M===0){ info.className='hint'; info.textContent='Спочатку потрібно додати картинки — тоді буде підібрано рекомендований розмір колоди.'; $('#go').disabled=true; return; }
   const d=DECKS[+$('#deck').value];
   if(M<d.total){
     info.className='hint warn';
-    info.innerHTML=`⚠️ Бракує <b>${d.total-M}</b> картинок: потрібно ${d.total}, маєш ${M}. Додай ще або обери меншу колоду.`;
+    info.innerHTML=`⚠️ Недостатньо картинок: потрібно <b>${d.total}</b>, доступно ${M} (бракує ${d.total-M}). Можна додати ще або обрати меншу колоду.`;
     $('#go').disabled=true; return;
   }
   info.className='hint';
-  info.textContent=`Потрібно ${d.total} символів. Маєш ${M} — візьму перші ${d.total}`+(M>d.total?`, решту (${M-d.total}) не задію.`:'.');
+  info.textContent=`Потрібно ${d.total} символів. Доступно ${M} — буде використано перші ${d.total}`+(M>d.total?`, решта (${M-d.total}) не використовується.`:'.');
   $('#go').disabled=false;
+}
+
+// --- валідатор роздільності: чи вистачає пікселів для чіткого друку ---
+const MIN_PPI = 150;
+// безкоштовні онлайн-апскейлери (без реєстрації) для збільшення роздільності
+const UPSCALERS =
+  '<a href="https://upsampler.com/free-image-upscaler-no-signup" target="_blank" rel="noopener">Upsampler</a>, '+
+  '<a href="https://www.pixelcut.ai/image-upscaler" target="_blank" rel="noopener">Pixelcut</a>, '+
+  '<a href="https://www.img2go.com/upscale-image" target="_blank" rel="noopener">Img2Go</a>';
+function slotDiagMM(){
+  const per=DECKS[+$('#deck').value].per, cardMM=+$('#size').value, shape=$('#shape').value;
+  const fill=shape==='square'?0.82:0.72;
+  const base=Math.min(Math.sqrt(fill/per), shape==='square'?0.46:0.40);
+  return base*0.97*cardMM;                       // діагональ слота символу в мм
+}
+function lowResWarnings(){
+  if(!SYMBOLS.length) return [];
+  const slot=slotDiagMM(), out=[];
+  SYMBOLS.forEach((s,i)=>{
+    const ppi = Math.hypot(s.w, s.h) / (slot/25.4);   // ефективна роздільність друку
+    if(ppi < MIN_PPI) out.push({i, ppi: Math.round(ppi)});
+  });
+  return out;
+}
+function updateResWarn(){
+  const el=$('#reswarn'), thumbs=$('#thumbs').children;
+  [...thumbs].forEach(c=>c.classList.remove('lowres'));
+  if(!SYMBOLS.length){ el.textContent=''; el.className='hint'; return; }
+  const w=lowResWarnings();
+  if(w.length){
+    w.forEach(x=>{ if(thumbs[x.i]) thumbs[x.i].classList.add('lowres'); });
+    const ppis=w.map(x=>x.ppi), lo=Math.min(...ppis), hi=Math.max(...ppis);
+    el.className='hint warn';
+    el.innerHTML=`⚠️ <b>${w.length}</b> з ${SYMBOLS.length} картинок мають низьку роздільність (≈${lo}${lo!==hi?'–'+hi:''} ppi, бажано ≥${MIN_PPI}) — на друці будуть трохи розмиті (позначені червоним). Це не критично; за бажання можна зменшити розмір картки, замінити картинки на більші або безкоштовно збільшити їхню роздільність онлайн: ${UPSCALERS}.`;
+  } else {
+    el.className='hint ok';
+    el.textContent=`✓ Усі ${SYMBOLS.length} картинок достатньої роздільності для друку (≥${MIN_PPI} ppi при цьому розмірі картки).`;
+  }
 }
 
 async function addFiles(fileList){
   const imgs=[...fileList].filter(f=>f.type.startsWith('image/')||/\.svg$/i.test(f.name));
   if(!imgs.length) return;
-  $('#count').textContent='Обробляю картинки…';
+  $('#count').textContent='Обробка картинок…';
   for(const f of imgs){
     try { const img=await fileToImage(f); SYMBOLS.push(trimToContent(img)); }
     catch(e){ console.warn(e); }
@@ -393,6 +492,7 @@ async function addFiles(fileList){
     cx.drawImage(s.canvas,(46-s.w*sc)/2,(46-s.h*sc)/2,s.w*sc,s.h*sc); t.appendChild(c); });
   $('#count').innerHTML=`Завантажено <span class="badge">${SYMBOLS.length}</span> картинок`;
   refreshDeckOptions();
+  updateResWarn();
 }
 
 const drop=$('#drop');
@@ -401,7 +501,9 @@ $('#files').onchange=e=>addFiles(e.target.files);
 ['dragenter','dragover'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.add('hover');}));
 ['dragleave','drop'].forEach(ev=>drop.addEventListener(ev,e=>{e.preventDefault();drop.classList.remove('hover');}));
 drop.addEventListener('drop',e=>addFiles(e.dataTransfer.files));
-$('#deck').onchange=updateDeckInfo;
+$('#deck').onchange=()=>{ updateDeckInfo(); updateResWarn(); };
+$('#size').oninput=updateResWarn;
+$('#shape').onchange=updateResWarn;
 $('#useEmblem').onchange=e=>$('#emblemBox').classList.toggle('show', e.target.checked);
 $('#emblemFile').onchange=async e=>{ if(e.target.files[0]){ const img=await fileToImage(e.target.files[0]); EMBLEM=trimToContent(img,900); } };
 $('#go').onclick=()=>generate().catch(err=>{status('Помилка: '+err.message,'err'); $('#go').disabled=false;});
