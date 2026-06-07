@@ -32,6 +32,12 @@
   #thumbs { display:flex; flex-wrap:wrap; gap:6px; margin-top:12px; }
   #thumbs canvas { width:46px; height:46px; border:1px solid var(--line); border-radius:6px; background:#fff; object-fit:contain; }
   #thumbs canvas.lowres { outline:2px solid #e74c3c; outline-offset:1px; }
+  .thumb { position:relative; display:inline-block; line-height:0; }
+  .thumb .del { position:absolute; top:-5px; right:-5px; width:17px; height:17px; padding:0;
+    border:1px solid var(--line); border-radius:50%; background:#fff; color:#c0392b;
+    font-size:13px; line-height:1; font-weight:700; cursor:pointer;
+    display:flex; align-items:center; justify-content:center; box-shadow:0 1px 2px rgba(0,0,0,.18); }
+  .thumb .del:hover { background:#c0392b; color:#fff; border-color:#c0392b; }
   #reswarn a { color:var(--accent); white-space:nowrap; }
   #preview { margin-top:14px; text-align:center; }
   #preview canvas { width:280px; height:280px; border:1px solid var(--line); border-radius:50%; background:#fff; }
@@ -462,8 +468,8 @@ function lowResWarnings(){
   return out;
 }
 function updateResWarn(){
-  const el=$('#reswarn'), thumbs=$('#thumbs').children;
-  [...thumbs].forEach(c=>c.classList.remove('lowres'));
+  const el=$('#reswarn'), thumbs=$('#thumbs').querySelectorAll('canvas');
+  thumbs.forEach(c=>c.classList.remove('lowres'));
   if(!SYMBOLS.length){ el.textContent=''; el.className='hint'; return; }
   const w=lowResWarnings();
   if(w.length){
@@ -477,6 +483,38 @@ function updateResWarn(){
   }
 }
 
+function updateCount(){
+  $('#count').innerHTML = SYMBOLS.length
+    ? `Завантажено <span class="badge">${SYMBOLS.length}</span> картинок · натисніть × на картинці, щоб видалити`
+    : '';
+}
+// Рендер мініатюр повністю з SYMBOLS — індекси мініатюр і символів завжди збігаються.
+function renderThumbs(){
+  const t=$('#thumbs'); t.innerHTML='';
+  SYMBOLS.forEach((s,i)=>{
+    const wrap=document.createElement('div'); wrap.className='thumb';
+    const c=document.createElement('canvas'); c.width=46; c.height=46;
+    const cx=c.getContext('2d'); const sc=Math.min(44/s.w,44/s.h);
+    cx.drawImage(s.canvas,(46-s.w*sc)/2,(46-s.h*sc)/2,s.w*sc,s.h*sc);
+    wrap.appendChild(c);
+    const del=document.createElement('button');
+    del.type='button'; del.className='del'; del.title='Видалити цю картинку'; del.textContent='×';
+    del.onclick=e=>{ e.stopPropagation(); removeSymbol(i); };
+    wrap.appendChild(del);
+    t.appendChild(wrap);
+  });
+  updateCount();
+}
+// Видалення картинки: чистимо ресурси, ре-рендеримо мініатюри (нові індекси),
+// перераховуємо опції колоди та валідатор роздільності.
+function removeSymbol(i){
+  if(i<0 || i>=SYMBOLS.length) return;
+  SYMBOLS.splice(i,1);
+  renderThumbs();
+  refreshDeckOptions();
+  updateResWarn();
+}
+
 async function addFiles(fileList){
   const imgs=[...fileList].filter(f=>f.type.startsWith('image/')||/\.svg$/i.test(f.name));
   if(!imgs.length) return;
@@ -485,12 +523,7 @@ async function addFiles(fileList){
     try { const img=await fileToImage(f); SYMBOLS.push(trimToContent(img)); }
     catch(e){ console.warn(e); }
   }
-  // мініатюри
-  const t=$('#thumbs'); t.innerHTML='';
-  SYMBOLS.forEach(s=>{ const c=document.createElement('canvas'); c.width=46; c.height=46;
-    const cx=c.getContext('2d'); const sc=Math.min(44/s.w,44/s.h);
-    cx.drawImage(s.canvas,(46-s.w*sc)/2,(46-s.h*sc)/2,s.w*sc,s.h*sc); t.appendChild(c); });
-  $('#count').innerHTML=`Завантажено <span class="badge">${SYMBOLS.length}</span> картинок`;
+  renderThumbs();
   refreshDeckOptions();
   updateResWarn();
 }
